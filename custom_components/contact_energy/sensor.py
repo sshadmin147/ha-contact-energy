@@ -120,7 +120,7 @@ class ContactEnergyUsageSensor(SensorEntity):
         """Return the unique id."""
         return self._unique_id
 
-    def async_update(self):
+    async def async_update(self):
         """Begin usage update."""
         _LOGGER.debug("Beginning usage update")
 
