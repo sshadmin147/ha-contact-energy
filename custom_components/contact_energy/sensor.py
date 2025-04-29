@@ -120,7 +120,7 @@ class ContactEnergyUsageSensor(SensorEntity):
         """Return the unique id."""
         return self._unique_id
 
-    def update(self):
+    def async_update(self):
         """Begin usage update."""
         _LOGGER.debug("Beginning usage update")
 
@@ -187,7 +187,7 @@ class ContactEnergyUsageSensor(SensorEntity):
             statistic_id=f"{DOMAIN}:energy_consumption",
             unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         )
-        async_add_external_statistics(self.hass, kWhMetadata, kWhStatistics)
+        await async_add_external_statistics(self.hass, kWhMetadata, kWhStatistics)
 
         freeKWHMetadata = StatisticMetaData(
             has_mean=False,
@@ -197,4 +197,4 @@ class ContactEnergyUsageSensor(SensorEntity):
             statistic_id=f"{DOMAIN}:free_energy_consumption",
             unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         )
-        async_add_external_statistics(self.hass, freeKWHMetadata, freeKWhStatistics)
+        await async_add_external_statistics(self.hass, freeKWHMetadata, freeKWhStatistics)
