@@ -16,7 +16,7 @@ class ContactEnergyApi:
         self._contractId = ""
         self._accountId = ""
         self._url_base = "https://api.contact-digital-prod.net"
-        self._api_key = "z840P4lQCH9TqcjC9L2pP157DZcZJMcr5tVQCvyx"
+        self._api_key = "wg8mXRp7kQ82aOT7mTkzl9fsULf1sEcu7WMGtn6C"  # ← UPDATED
         self._email = email
         self._password = password
 
@@ -66,7 +66,7 @@ class ContactEnergyApi:
 
     def get_accounts(self):
         """Get the first account that we see."""
-        headers = {"x-api-key": self._api_key, "session": self._api_session}
+        headers = {"x-api-key": self._api_key, "cookie": f"userAuth={self._api_session}"}  # ← UPDATED
         result = requests.get(
             self._url_base + "/customer/v2?fetchAccounts=true", headers=headers
         )
@@ -81,7 +81,11 @@ class ContactEnergyApi:
 
     def get_usage(self, year, month, day):
         """Update our usage data."""
-        headers = {"x-api-key": self._api_key, "authorization": self._api_token}
+        headers = {
+            "x-api-key": self._api_key,
+            "authorization": self._api_token,
+            "cookie": f"userAuth={self._api_session}",  # ← UPDATED
+        }
         response = requests.post(
             self._url_base
             + "/usage/v2/"
@@ -101,6 +105,7 @@ class ContactEnergyApi:
             + "-"
             + (day.zfill(2)),
             headers=headers,
+            json=None,  # ← SEND 'null' body (important for POST)
         )
         data = {}
         if response.status_code == requests.codes.ok:
