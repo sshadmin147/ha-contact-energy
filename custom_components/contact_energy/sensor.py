@@ -1,4 +1,4 @@
-"""Contact Energy sensors."""
+"""Contact Energy sensors with broadband included."""
 
 from datetime import datetime, timedelta
 
@@ -52,15 +52,16 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     """Set up the platform async."""
     email = config.get(CONF_EMAIL)
     password = config.get(CONF_PASSWORD)
-
     usage_days = config.get(CONF_USAGE_DAYS)
 
     api = ContactEnergyApi(hass, email, password)
 
     _LOGGER.debug("Setting up sensor(s)...")
 
-    sensors = []
-    sensors.append(ContactEnergyUsageSensor(SENSOR_USAGE_NAME, api, usage_days))
+    sensors = [
+        ContactEnergyUsageSensor(SENSOR_USAGE_NAME, api, usage_days),
+        ContactEnergyBroadbandSensor("Broadband Plan", api),
+    ]
     async_add_entities(sensors, True)
 
 
@@ -68,12 +69,11 @@ class ContactEnergyUsageSensor(SensorEntity):
     """Define Contact Energy Usage sensor."""
 
     def __init__(self, name, api, usage_days):
-        """Intialise the sensor."""
         self._name = name
         self._icon = "mdi:meter-electric"
         self._state = 0
         self._unit_of_measurement = "kWh"
-        self._unique_id = DOMAIN
+        self._unique_id = f"{DOMAIN}_usage"
         self._device_class = "energy"
         self._state_class = "total"
         self._state_attributes = {}
@@ -81,156 +81,135 @@ class ContactEnergyUsageSensor(SensorEntity):
         self._api = api
 
     @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
+    def name(self): return self._name
 
     @property
-    def icon(self):
-        """Icon to use in the frontend, if any."""
-        return self._icon
+    def icon(self): return self._icon
 
     @property
-    def state(self):
-        """Return the state of the device."""
-        return self._state
+    def state(self): return self._state
 
     @property
-    def extra_state_attributes(self):
-        """Return the state attributes of the sensor."""
-        return self._state_attributes
+    def extra_state_attributes(self): return self._state_attributes
 
     @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement."""
-        return self._unit_of_measurement
+    def unit_of_measurement(self): return self._unit_of_measurement
 
     @property
-    def state_class(self):
-        """Return the state class."""
-        return self._state_class
+    def state_class(self): return self._state_class
 
     @property
-    def device_class(self):
-        """Return the device class."""
-        return self._device_class
+    def device_class(self): return self._device_class
 
     @property
-    def unique_id(self):
-        """Return the unique id."""
-        return self._unique_id
+    def unique_id(self): return self._unique_id
 
     async def async_update(self):
-        """Begin usage update."""
         _LOGGER.debug("Beginning usage update")
 
-        # Check to see if our API Token is valid
-        if self._api._api_token:
-            _LOGGER.debug("We appear to be logged in (lets not verify it for now)")
-        else:
-            _LOGGER.info("Havent logged in yet, lets login now...")
+        if not self._api._api_token:
+            _LOGGER.info("Logging in...")
             if not await self._api.login():
-                _LOGGER.error(
-                    "Failed to get past login (usage will not be updated) - check the username and password are valid"
-                )
+                _LOGGER.error("Login failed. Check credentials.")
                 return
 
-        # Get today's date
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-        _LOGGER.debug("Fetching usage data")
-
-        kWhStatistics = []
-        kWhRunningSum = 0
-        dollarStatistics = []
-        dollarRunningSum = 0
-
-        freeKWhStatistics = []
-        freeKWhRunningSum = 0
-
+        kWhStats, dollarStats, freeKWhStats = [], [], []
+        kWhSum = dollarSum = freeKWhSum = 0
         currency = 'NZD'
 
         for i in range(self._usage_days):
-            previous_day = today - timedelta(days=self._usage_days - i)
-            response = await self._api.get_usage(
-                str(previous_day.year), str(previous_day.month), str(previous_day.day)
-            )
-            if response and response[0]:
-                for point in response:
-                    if point['currency'] and currency != point['currency']:
-                        currency = point['currency']
+            day = today - timedelta(days=self._usage_days - i)
+            usage = await self._api.get_usage(day.year, day.month, day.day)
 
-                    if point["value"]:
-                        # If the off peak value is '0.00' then the energy is free.
-                        # HASSIO statistics requires us to add values as a sum of all previous values.
-                        if point["offpeakValue"] == "0.00":
-                            kWhRunningSum = kWhRunningSum + float(point["value"])
-                            dollarRunningSum = dollarRunningSum + float(point["dollarValue"])
-                        else:
-                            freeKWhRunningSum = freeKWhRunningSum + float(point["value"])
+            if usage:
+                for point in usage:
+                    ts = datetime.strptime(point["date"], "%Y-%m-%dT%H:%M:%S.%f%z")
+                    value = float(point["value"])
 
-                        freeKWhStatistics.append(
-                            StatisticData(
-                                start=datetime.strptime(
-                                    point["date"], "%Y-%m-%dT%H:%M:%S.%f%z"
-                                ),
-                                sum=freeKWhRunningSum,
-                            )
-                        )
-                        kWhStatistics.append(
-                            StatisticData(
-                                start=datetime.strptime(
-                                    point["date"], "%Y-%m-%dT%H:%M:%S.%f%z"
-                                ),
-                                sum=kWhRunningSum,
-                            )
-                        )
+                    if point.get("currency"):
+                        currency = point["currency"]
 
-                        dollarStatistics.append(
-                            StatisticData(
-                                start=datetime.strptime(
-                                    point["date"], "%Y-%m-%dT%H:%M:%S.%f%z"
-                                ),
-                                sum=dollarRunningSum,
-                            )
-                        )
+                    if point.get("offpeakValue") == "0.00":
+                        kWhSum += value
+                        dollarSum += float(point.get("dollarValue") or 0)
+                    else:
+                        freeKWhSum += value
 
-        kWhMetadata = StatisticMetaData(
-            has_mean=False,
-            has_sum=True,
-            name="ContactEnergy",
-            source=DOMAIN,
-            statistic_id=f"{DOMAIN}:energy_consumption",
-            unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                    kWhStats.append(StatisticData(start=ts, sum=kWhSum))
+                    dollarStats.append(StatisticData(start=ts, sum=dollarSum))
+                    freeKWhStats.append(StatisticData(start=ts, sum=freeKWhSum))
+
+        async_add_external_statistics(
+            self.hass,
+            StatisticMetaData(
+                has_mean=False, has_sum=True, name="ContactEnergy", source=DOMAIN,
+                statistic_id=f"{DOMAIN}:energy_consumption", unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            ),
+            kWhStats,
         )
-        async_add_external_statistics(self.hass, kWhMetadata, kWhStatistics)
 
-        dollarMetadata = StatisticMetaData(
-            has_mean=False,
-            has_sum=True,
-            name="ContactEnergyDollars",
-            source=DOMAIN,
-            statistic_id=f"{DOMAIN}:energy_consumption_in_dollars",
-            unit_of_measurement=currency,
+        async_add_external_statistics(
+            self.hass,
+            StatisticMetaData(
+                has_mean=False, has_sum=True, name="ContactEnergyDollars", source=DOMAIN,
+                statistic_id=f"{DOMAIN}:energy_consumption_in_dollars", unit_of_measurement=currency,
+            ),
+            dollarStats,
         )
-        async_add_external_statistics(self.hass, dollarMetadata, dollarStatistics)
 
-        freeKWHMetadata = StatisticMetaData(
-            has_mean=False,
-            has_sum=True,
-            name="FreeContactEnergy",
-            source=DOMAIN,
-            statistic_id=f"{DOMAIN}:free_energy_consumption",
-            unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        async_add_external_statistics(
+            self.hass,
+            StatisticMetaData(
+                has_mean=False, has_sum=True, name="FreeContactEnergy", source=DOMAIN,
+                statistic_id=f"{DOMAIN}:free_energy_consumption", unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            ),
+            freeKWhStats,
         )
-        async_add_external_statistics(self.hass, freeKWHMetadata, freeKWhStatistics)
 
-        freeEnergyDollarMetadata = StatisticMetaData(
-            has_mean=False,
-            has_sum=True,
-            name="FreeContactEnergyDollars",
-            source=DOMAIN,
-            statistic_id=f"{DOMAIN}:free_energy_consumption_in_dollars",
-            unit_of_measurement=currency,
-        )
-        async_add_external_statistics(self.hass, freeEnergyDollarMetadata, [])
+
+class ContactEnergyBroadbandSensor(SensorEntity):
+    """Sensor for broadband plan info."""
+
+    def __init__(self, name, api):
+        self._name = name
+        self._api = api
+        self._state = None
+        self._attributes = {}
+        self._icon = "mdi:lan"
+        self._unique_id = f"{DOMAIN}_broadband"
+
+    @property
+    def name(self): return self._name
+
+    @property
+    def state(self): return self._state
+
+    @property
+    def icon(self): return self._icon
+
+    @property
+    def extra_state_attributes(self): return self._attributes
+
+    @property
+    def unique_id(self): return self._unique_id
+
+    async def async_update(self):
+        _LOGGER.debug("Updating broadband plan details...")
+        if not self._api._api_token:
+            _LOGGER.info("Logging in...")
+            if not await self._api.login():
+                _LOGGER.error("Login failed. Cannot fetch broadband plan.")
+                return
+
+        plan = await self._api.get_plan_details()
+        if plan:
+            try:
+                broadband = next(
+                    s for p in plan["premises"] for s in p["services"] if s["serviceType"] == "BROADBAND"
+                )
+                self._state = broadband["planDetails"].get("externalPlanDescription")
+                self._attributes = broadband["planDetails"]
+            except Exception as e:
+                _LOGGER.error(f"Failed to parse broadband plan details: {e}")
