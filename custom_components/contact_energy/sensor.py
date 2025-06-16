@@ -120,7 +120,7 @@ class ContactEnergyUsageSensor(SensorEntity):
         """Return the unique id."""
         return self._unique_id
 
-    def update(self):
+    async def async_update(self):
         """Begin usage update."""
         _LOGGER.debug("Beginning usage update")
 
@@ -129,14 +129,15 @@ class ContactEnergyUsageSensor(SensorEntity):
             _LOGGER.debug("We appear to be logged in (lets not verify it for now)")
         else:
             _LOGGER.info("Havent logged in yet, lets login now...")
-            if self._api.login() is False:
+            if not await self._api.login():
                 _LOGGER.error(
                     "Failed to get past login (usage will not be updated) - check the username and password are valid"
                 )
-                return False
+                return
 
-        # Get todays date
+        # Get today's date
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
         _LOGGER.debug("Fetching usage data")
 
         kWhStatistics = []
@@ -151,7 +152,7 @@ class ContactEnergyUsageSensor(SensorEntity):
 
         for i in range(self._usage_days):
             previous_day = today - timedelta(days=self._usage_days - i)
-            response = self._api.get_usage(
+            response = await self._api.get_usage(
                 str(previous_day.year), str(previous_day.month), str(previous_day.day)
             )
             if response and response[0]:
