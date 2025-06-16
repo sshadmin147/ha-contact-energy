@@ -2,6 +2,7 @@
 
 import logging
 import requests
+from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -9,8 +10,9 @@ _LOGGER = logging.getLogger(__name__)
 class ContactEnergyApi:
     """Class for Contact Energy API."""
 
-    def __init__(self, email, password):
+    def __init__(self, hass: HomeAssistant, email, password):
         """Initialise Contact Energy API."""
+        self._hass = hass
         self._api_token = ""
         self._api_session = ""
         self._contractId = ""
@@ -20,103 +22,92 @@ class ContactEnergyApi:
         self._email = email
         self._password = password
 
-    def login(self):
+    async def login(self):
         """Login to the Contact Energy API."""
-        result = False
         headers = {"x-api-key": self._api_key}
         data = {"username": self._email, "password": self._password}
-        loginResult = requests.post(
-            self._url_base + "/login/v2", json=data, headers=headers
-        )
+
+        def do_login():
+            return requests.post(self._url_base + "/login/v2", json=data, headers=headers)
+
+        loginResult = await self._hass.async_add_executor_job(do_login)
+
         if loginResult.status_code == requests.codes.ok:
             jsonResult = loginResult.json()
             self._api_token = jsonResult["token"]
             _LOGGER.debug("Logged in")
-            self.refresh_session()
-            result = True
+            await self.refresh_session()
+            return True
         else:
-            _LOGGER.error(
-                "Failed to login - check the username and password are valid",
-                loginResult.text,
-            )
+            _LOGGER.error("Failed to login - check the username and password are valid: %s", loginResult.text)
             return False
-        return result
 
-    def refresh_session(self):
+    async def refresh_session(self):
         """Refresh the session."""
-        result = False
         headers = {"x-api-key": self._api_key}
         data = {"username": self._email, "password": self._password}
-        loginResult = requests.post(
-            self._url_base + "/login/v2/refresh", json=data, headers=headers
-        )
+
+        def do_refresh():
+            return requests.post(self._url_base + "/login/v2/refresh", json=data, headers=headers)
+
+        loginResult = await self._hass.async_add_executor_job(do_refresh)
+
         if loginResult.status_code == requests.codes.ok:
             jsonResult = loginResult.json()
             self._api_session = jsonResult["session"]
             _LOGGER.debug("Refreshed session")
-            self.get_accounts()
-            result = True
+            await self.get_accounts()
+            return True
         else:
-            _LOGGER.error(
-                "Failed to refresh session - check the username and password are valid",
-                loginResult.text,
-            )
+            _LOGGER.error("Failed to refresh session - check credentials: %s", loginResult.text)
             return False
-        return result
 
-    def get_accounts(self):
+    async def get_accounts(self):
         """Get the first account that we see."""
-        headers = {"x-api-key": self._api_key, "cookie": f"userAuth={self._api_session}"}  # ← UPDATED
-        result = requests.get(
-            self._url_base + "/customer/v2?fetchAccounts=true", headers=headers
-        )
+        headers = {
+            "x-api-key": self._api_key,
+            "cookie": f"userAuth={self._api_session}",
+        }
+
+        def do_get_accounts():
+            return requests.get(self._url_base + "/customer/v2?fetchAccounts=true", headers=headers)
+
+        result = await self._hass.async_add_executor_job(do_get_accounts)
+
         if result.status_code == requests.codes.ok:
             _LOGGER.debug("Retrieved accounts")
             data = result.json()
             self._accountId = data["accounts"][0]["id"]
             self._contractId = data["accounts"][0]["contracts"][0]["contractId"]
+            return True
         else:
-            _LOGGER.error("Failed to fetch customer accounts %s", result.text)
+            _LOGGER.error("Failed to fetch customer accounts: %s", result.text)
             return False
 
-    def get_usage(self, year, month, day):
+    async def get_usage(self, year, month, day):
         """Update our usage data."""
         headers = {
             "x-api-key": self._api_key,
             "authorization": self._api_token,
-            "cookie": f"userAuth={self._api_session}",  # ← UPDATED
+            "cookie": f"userAuth={self._api_session}",
         }
-        response = requests.post(
-            self._url_base
-            + "/usage/v2/"
-            + self._contractId
-            + "?ba="
-            + self._accountId
-            + "&interval=hourly&from="
-            + year
-            + "-"
-            + (month.zfill(2))
-            + "-"
-            + (day.zfill(2))
-            + "&to="
-            + year
-            + "-"
-            + (month.zfill(2))
-            + "-"
-            + (day.zfill(2)),
-            headers=headers,
-            json=None,  # ← SEND 'null' body (important for POST)
-        )
-        data = {}
+
+        def do_get_usage():
+            return requests.post(
+                f"{self._url_base}/usage/v2/{self._contractId}"
+                f"?ba={self._accountId}&interval=hourly"
+                f"&from={year}-{month.zfill(2)}-{day.zfill(2)}"
+                f"&to={year}-{month.zfill(2)}-{day.zfill(2)}",
+                headers=headers,
+                json=None,  # Send null as body
+            )
+
+        response = await self._hass.async_add_executor_job(do_get_usage)
+
         if response.status_code == requests.codes.ok:
             data = response.json()
             if not data:
-                _LOGGER.info(
-                    "Fetched usage data for %s/%s/%s, but got nothing back",
-                    year,
-                    month,
-                    day,
-                )
+                _LOGGER.info("Fetched usage data for %s/%s/%s, but got nothing", year, month, day)
             return data
         else:
             _LOGGER.error("Failed to fetch usage data for %s/%s/%s", year, month, day)

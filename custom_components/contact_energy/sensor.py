@@ -55,7 +55,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
     usage_days = config.get(CONF_USAGE_DAYS)
 
-    api = ContactEnergyApi(email, password)
+    api = ContactEnergyApi(hass, email, password)
 
     _LOGGER.debug("Setting up sensor(s)...")
 
