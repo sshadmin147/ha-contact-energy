@@ -13,6 +13,7 @@ class ContactEnergyApi:
         self._csrf_token = None
         self._account_id = None
         self._contract_id = None
+        self._broadband_plan = None
 
     async def login(self):
         try:
@@ -24,47 +25,58 @@ class ContactEnergyApi:
                 "username": self.email,
                 "password": self.password,
             }
-            resp = self.session.post(f"{self.base_url}/login/v2", json=payload, headers=headers)
+
+            resp = await self.hass.async_add_executor_job(
+                lambda: self.session.post(f"{self.base_url}/login/v2", json=payload, headers=headers)
+            )
             resp.raise_for_status()
             self._api_token = resp.json()["token"]
 
-            # Refresh session to get CSRF token
             headers = {
                 "x-api-key": self.api_key,
                 "Authorization": self._api_token,
                 "Content-Type": "application/json",
             }
-            resp = self.session.post(f"{self.base_url}/login/v2/refresh", json=payload, headers=headers)
+            resp = await self.hass.async_add_executor_job(
+                lambda: self.session.post(f"{self.base_url}/login/v2/refresh", json=payload, headers=headers)
+            )
             resp.raise_for_status()
             data = resp.json()
             self._csrf_token = data["x-csrf-token"]
             self._session_token = data["session"]
 
-            # Fetch account and contract IDs
-            return self._fetch_plan_details()
+            return await self._fetch_plan_details()
 
         except Exception as e:
             print(f"Login failed: {e}")
             return False
 
-    def _fetch_plan_details(self):
+    async def _fetch_plan_details(self):
         headers = self._auth_headers()
-        resp = self.session.get(
-            f"{self.base_url}/usage/v2/plan-details",
-            headers=headers,
-            params={"ba": "501835449"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = await self.hass.async_add_executor_job(
+                lambda: self.session.get(
+                    f"{self.base_url}/usage/v2/plan-details",
+                    headers=headers,
+                    params={"ba": "501835449"},
+                )
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-        self._account_id = data["accountId"]
-        # Use first electricity contract found
-        for s in data["premises"][0]["services"]:
-            if s["serviceType"] == "ELEC":
-                self._contract_id = s["contract"]["contractId"]
-                return True
+            self._account_id = data["accountId"]
 
-        return False
+            for s in data["premises"][0]["services"]:
+                if s["serviceType"] == "ELEC":
+                    self._contract_id = s["contract"]["contractId"]
+                elif s["serviceType"] == "BROADBAND":
+                    self._broadband_plan = s.get("planDetails", {}).get("externalPlanDescription")
+
+            return self._contract_id is not None
+
+        except Exception as e:
+            print(f"Failed to fetch plan details: {e}")
+            return False
 
     async def get_usage(self, year, month, day):
         try:
@@ -72,15 +84,17 @@ class ContactEnergyApi:
             to_date = datetime.now().strftime("%Y-%m-%d")
 
             headers = self._auth_headers()
-            resp = self.session.post(
-                f"{self.base_url}/usage/v2/{self._contract_id}",
-                headers=headers,
-                params={
-                    "ba": self._account_id,
-                    "interval": "monthly",
-                    "from": from_date,
-                    "to": to_date,
-                },
+            resp = await self.hass.async_add_executor_job(
+                lambda: self.session.post(
+                    f"{self.base_url}/usage/v2/{self._contract_id}",
+                    headers=headers,
+                    params={
+                        "ba": self._account_id,
+                        "interval": "monthly",
+                        "from": from_date,
+                        "to": to_date,
+                    },
+                )
             )
             resp.raise_for_status()
             return resp.json()
